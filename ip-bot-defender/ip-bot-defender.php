@@ -2,7 +2,7 @@
 /**
  * Plugin Name: IP & Bot Defender
  * Description: Blocks IPs and bots that generate too many 404 errors or failed login attempts. Optimized for Cloudflare & Nginx setups.
- * Version: 1.2.0
+ * Version: 1.2.1
  * Author: chall3ng3r.com
  */
 
@@ -35,10 +35,8 @@ class IP_Bot_Defender {
             'bot_list'        => '',
             'bot_status_code' => 403,
             'block_empty_ua'  => 0,
-            // Login specific defaults
             'login_threshold' => 3,
-            'login_retry_limit' => 1, // hours to track strikes
-            'login_lockout'   => 3, // hours to ban
+            'login_lockout'   => 3, 
         );
         return wp_parse_args( get_option( $this->option_name, array() ), $defaults );
     }
@@ -53,6 +51,20 @@ class IP_Bot_Defender {
             'dashicons-shield',
             80
         );
+    }
+
+    /**
+     * Helper to get count of active blocks from the database
+     */
+    private function get_block_count($type) {
+        global $wpdb;
+        $prefix = "_transient_ipbd_{$type}_";
+        // We count the base transients, excluding the timeout records
+        return (int) $wpdb->get_var( $wpdb->prepare(
+            "SELECT COUNT(option_id) FROM {$wpdb->options} WHERE option_name LIKE %s AND option_name NOT LIKE %s",
+            $wpdb->esc_like( $prefix ) . '%',
+            $wpdb->esc_like( '_transient_timeout_' ) . '%'
+        ));
     }
 
     public function get_client_ip() {
@@ -112,7 +124,6 @@ class IP_Bot_Defender {
             add_settings_error( 'ipbd_messages', 'ipbd_message', 'Settings Saved.', 'updated' );
         }
 
-        // Bulk/Single Unblock
         if ( (isset( $_POST['ipbd_bulk_unblock'] ) && !empty( $_POST['ipbd_ips'] )) || isset( $_POST['ipbd_unblock_ip'] ) ) {
             $is_bulk = isset($_POST['ipbd_bulk_unblock']);
             check_admin_referer( $is_bulk ? 'ipbd_bulk_action' : 'ipbd_unblock_action', $is_bulk ? 'ipbd_bulk_nonce' : 'ipbd_unblock_nonce' );
@@ -131,6 +142,10 @@ class IP_Bot_Defender {
 
     public function render_admin_page() {
         $active_tab = isset( $_GET['tab'] ) ? sanitize_text_field( $_GET['tab'] ) : 'settings';
+        
+        // Get counts for tab labels
+        $count_404 = $this->get_block_count('blocked');
+        $count_login = $this->get_block_count('login');
         ?>
         <div class="wrap">
             <h1>IP & Bot Defender</h1>
@@ -141,8 +156,8 @@ class IP_Bot_Defender {
             
             <h2 class="nav-tab-wrapper">
                 <a href="?page=ip-bot-defender&tab=settings" class="nav-tab <?php echo $active_tab == 'settings' ? 'nav-tab-active' : ''; ?>">Settings</a>
-                <a href="?page=ip-bot-defender&tab=blocked-ips" class="nav-tab <?php echo $active_tab == 'blocked-ips' ? 'nav-tab-active' : ''; ?>">404 Blocks</a>
-                <a href="?page=ip-bot-defender&tab=login-blocks" class="nav-tab <?php echo $active_tab == 'login-blocks' ? 'nav-tab-active' : ''; ?>">Login Blocks</a>
+                <a href="?page=ip-bot-defender&tab=blocked-ips" class="nav-tab <?php echo $active_tab == 'blocked-ips' ? 'nav-tab-active' : ''; ?>">404 Blocks (<?php echo $count_404; ?>)</a>
+                <a href="?page=ip-bot-defender&tab=login-blocks" class="nav-tab <?php echo $active_tab == 'login-blocks' ? 'nav-tab-active' : ''; ?>">Login Blocks (<?php echo $count_login; ?>)</a>
             </h2>
 
             <div class="dbb-tab-content" style="margin-top: 20px;">
@@ -272,7 +287,7 @@ class IP_Bot_Defender {
         }
 
         if (!empty($settings['block_empty_ua']) && empty($ua)) {
-            status_header($settings['bot_status_code'] ?? 403);
+            status_header(403);
             exit('Access Denied.');
         }
 
@@ -280,7 +295,7 @@ class IP_Bot_Defender {
             $bots = explode("\n", str_replace("\r", "", $settings['bot_list']));
             foreach ($bots as $bot) {
                 if (!empty(trim($bot)) && stripos($ua, trim($bot)) !== false) {
-                    status_header($settings['bot_status_code'] ?? 403);
+                    status_header(403);
                     exit('Access Denied.');
                 }
             }
@@ -299,7 +314,7 @@ class IP_Bot_Defender {
             set_transient('ipbd_login_'.$ip, array('time'=>time(), 'ua'=>$_SERVER['HTTP_USER_AGENT']??'Unknown'), $settings['login_lockout'] * HOUR_IN_SECONDS);
             delete_transient($strike_key);
         } else {
-            set_transient($strike_key, $strikes, 1 * HOUR_IN_SECONDS); // track strikes for 1 hour
+            set_transient($strike_key, $strikes, 1 * HOUR_IN_SECONDS);
         }
     }
 
