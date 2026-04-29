@@ -2,7 +2,7 @@
 /**
  * Plugin Name: IP & Bot Defender
  * Description: Blocks IPs and bots that generate too many 404 errors or failed login attempts. Optimized for Cloudflare & Nginx setups.
- * Version: 1.2.2
+ * Version: 1.2.3
  * Author: chall3ng3r.com
  */
 
@@ -15,18 +15,25 @@ class IP_Bot_Defender {
     private $option_name = 'ipbd_settings';
 
     public function __construct() {
+        // Initialize admin menu and settings
         add_action( 'admin_menu', array( $this, 'add_admin_menu' ) );
         add_action( 'admin_init', array( $this, 'handle_admin_actions' ) );
+        
+        // Security hooks for traffic interception
         add_action( 'init', array( $this, 'intercept_bad_actors' ) );
         add_action( 'template_redirect', array( $this, 'track_404_errors' ) );
         
-        // Login Protection Hooks
+        // Hooks for login protection
         add_action( 'wp_login_failed', array( $this, 'track_login_failed' ) );
         add_action( 'login_init', array( $this, 'intercept_login_blocked' ) );
         
+        // Load admin scripts
         add_action( 'admin_footer', array( $this, 'render_admin_scripts' ) );
     }
 
+    /**
+     * Retrieve plugin settings with defaults
+     */
     private function get_settings() {
         $defaults = array(
             'error_threshold' => 5,
@@ -41,6 +48,9 @@ class IP_Bot_Defender {
         return wp_parse_args( get_option( $this->option_name, array() ), $defaults );
     }
 
+    /**
+     * Create the WordPress admin menu entry
+     */
     public function add_admin_menu() {
         add_menu_page(
             'IP & Bot Defender Settings',
@@ -53,6 +63,9 @@ class IP_Bot_Defender {
         );
     }
 
+    /**
+     * Query database for the count of currently blocked IPs
+     */
     private function get_block_count($type) {
         global $wpdb;
         $prefix = "_transient_ipbd_{$type}_";
@@ -63,6 +76,9 @@ class IP_Bot_Defender {
         ));
     }
 
+    /**
+     * Accurately identify client IP, prioritizing Cloudflare headers
+     */
     public function get_client_ip() {
         $ip = '0.0.0.0';
         if ( ! empty( $_SERVER['HTTP_CF_CONNECTING_IP'] ) ) {
@@ -78,33 +94,66 @@ class IP_Bot_Defender {
         return filter_var($ip, FILTER_VALIDATE_IP) ? $ip : '0.0.0.0';
     }
 
+    /**
+     * Comprehensive list of Cloudflare IPv4 and IPv6 ranges to prevent self-blocking
+     */
     private function is_cloudflare_infrastructure_ip($ip) {
+        // Current official IPv4 ranges
         $cf_ipv4_ranges = array(
-            '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
-            '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
-            '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
-            '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22'
+            '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '104.16.0.0/13',
+            '104.24.0.0/14', '108.162.192.0/18', '131.0.72.0/22', '141.101.64.0/18',
+            '162.158.0.0/15', '172.64.0.0/13', '173.245.48.0/20', '188.114.96.0/20',
+            '190.93.240.0/20', '197.234.240.0/22', '198.41.128.0/17'
         );
-        foreach ($cf_ipv4_ranges as $range) {
+
+        // Current official IPv6 ranges
+        $cf_ipv6_ranges = array(
+            '2400:cb00::/32', '2405:8100::/32', '2405:b500::/32', '2606:4700::/32',
+            '2803:f800::/32', '2a06:98c0::/29', '2c0f:f248::/32'
+        );
+
+        // Check against both IPv4 and IPv6 ranges
+        $all_ranges = array_merge($cf_ipv4_ranges, $cf_ipv6_ranges);
+        foreach ($all_ranges as $range) {
             if ($this->ip_in_range($ip, $range)) return true;
         }
         return false;
     }
 
+    /**
+     * CIDR range matching for IPv4 and IPv6
+     */
     private function ip_in_range($ip, $range) {
-        if (strpos($range, '/') === false) $range .= '/32';
-        list($range, $netmask) = explode('/', $range, 2);
-        $range_dec = ip2long($range);
+        if (strpos($range, '/') === false) $range .= (strpos($ip, ':') !== false) ? '/128' : '/32';
+        list($subnet, $bits) = explode('/', $range);
+
+        // IPv6 Check
+        if (strpos($ip, ':') !== false) {
+            $ip_bin = inet_pton($ip);
+            $subnet_bin = inet_pton($subnet);
+            if (!$ip_bin || !$subnet_bin) return false;
+            
+            $mask = str_repeat(chr(0xff), (int)($bits / 8));
+            if ($bits % 8) $mask .= chr(0xff << (8 - ($bits % 8)));
+            $mask = str_pad($mask, 16, chr(0x00));
+            return ($ip_bin & $mask) === ($subnet_bin & $mask);
+        }
+
+        // IPv4 Check
         $ip_dec = ip2long($ip);
-        if ($range_dec === false || $ip_dec === false) return false;
-        $wildcard_dec = pow(2, (32 - $netmask)) - 1;
-        $netmask_dec = ~ $wildcard_dec;
-        return (($ip_dec & $netmask_dec) == ($range_dec & $netmask_dec));
+        $subnet_dec = ip2long($subnet);
+        if ($ip_dec === false || $subnet_dec === false) return false;
+        $mask = ~((1 << (32 - $bits)) - 1);
+        return ($ip_dec & $mask) === ($subnet_dec & $mask);
     }
 
+    /**
+     * Process settings saves and IP unblocking requests
+     */
     public function handle_admin_actions() {
         if ( ! current_user_can( 'edit_pages' ) ) return;
 
+        // Save settings to database
         if ( isset( $_POST['ipbd_save_settings'] ) ) {
             check_admin_referer( 'ipbd_save_action', 'ipbd_settings_nonce' );
             $new_settings = array(
@@ -121,6 +170,7 @@ class IP_Bot_Defender {
             add_settings_error( 'ipbd_messages', 'ipbd_message', 'Settings Saved.', 'updated' );
         }
 
+        // Handle unblocking actions
         if ( (isset( $_POST['ipbd_bulk_unblock'] ) && !empty( $_POST['ipbd_ips'] )) || isset( $_POST['ipbd_unblock_ip'] ) ) {
             $is_bulk = isset($_POST['ipbd_bulk_unblock']);
             check_admin_referer( $is_bulk ? 'ipbd_bulk_action' : 'ipbd_unblock_action', $is_bulk ? 'ipbd_bulk_nonce' : 'ipbd_unblock_nonce' );
@@ -137,6 +187,9 @@ class IP_Bot_Defender {
         }
     }
 
+    /**
+     * Render the multi-tab administration dashboard
+     */
     public function render_admin_page() {
         $active_tab = isset( $_GET['tab'] ) ? sanitize_text_field( $_GET['tab'] ) : 'settings';
         $count_404 = $this->get_block_count('blocked');
@@ -166,6 +219,9 @@ class IP_Bot_Defender {
         <?php
     }
 
+    /**
+     * Render the table for currently blocked IPs
+     */
     private function render_ips_tab($type) {
         global $wpdb;
         $prefix = "_transient_ipbd_{$type}_";
@@ -227,6 +283,9 @@ class IP_Bot_Defender {
         <?php
     }
 
+    /**
+     * Render settings fields for 404, Login, and Global protection
+     */
     private function render_settings_tab() {
         $settings = $this->get_settings();
         ?>
@@ -270,25 +329,28 @@ class IP_Bot_Defender {
         <?php
     }
 
+    /**
+     * Early interception of requests from banned IPs or listed bots
+     */
     public function intercept_bad_actors() {
         if (is_admin() || wp_doing_ajax()) return;
         $ip = $this->get_client_ip();
         $settings = $this->get_settings();
         $ua = isset($_SERVER['HTTP_USER_AGENT']) ? trim($_SERVER['HTTP_USER_AGENT']) : '';
 
-        // Check 404 block or Login block
+        // Block if IP is found in existing blocklists
         if (get_transient('ipbd_blocked_' . $ip) || get_transient('ipbd_login_' . $ip)) {
             status_header($settings['status_code']);
             exit('Access Denied.');
         }
 
-        // Empty UA check
+        // Block if UA is missing when setting is enabled
         if (!empty($settings['block_empty_ua']) && empty($ua)) {
             status_header($settings['status_code']);
             exit('Access Denied.');
         }
 
-        // Manual Bot check
+        // Block if UA matches the manual bot list
         if (!empty($settings['bot_list']) && !empty($ua)) {
             $bots = explode("\n", str_replace("\r", "", $settings['bot_list']));
             foreach ($bots as $bot) {
@@ -301,6 +363,9 @@ class IP_Bot_Defender {
         }
     }
 
+    /**
+     * Increment strikes for failed login attempts and block if limit reached
+     */
     public function track_login_failed() {
         $ip = $this->get_client_ip();
         if ($this->is_cloudflare_infrastructure_ip($ip)) return;
@@ -317,14 +382,20 @@ class IP_Bot_Defender {
         }
     }
 
+    /**
+     * Check for active login blocks specifically on login pages
+     */
     public function intercept_login_blocked() {
         $ip = $this->get_client_ip();
         if (get_transient('ipbd_login_' . $ip)) {
             status_header($this->get_settings()['status_code']);
-            exit('Login Access Denied.');
+            exit('Access Denied.');
         }
     }
 
+    /**
+     * Increment strikes for 404 errors and block if limit reached
+     */
     public function track_404_errors() {
         if (is_404()) {
             $ip = $this->get_client_ip();
@@ -345,6 +416,9 @@ class IP_Bot_Defender {
         }
     }
 
+    /**
+     * Admin JavaScript for "Select All" functionality
+     */
     public function render_admin_scripts() {
         ?>
         <script type="text/javascript">
