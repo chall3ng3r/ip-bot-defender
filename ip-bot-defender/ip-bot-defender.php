@@ -161,7 +161,7 @@ class IP_Bot_Defender {
                 'time_limit'      => absint( $_POST['ipbd_time_limit'] ),
                 'status_code'     => absint( $_POST['ipbd_status_code'] ),
                 'bot_list'        => sanitize_textarea_field( wp_unslash( $_POST['ipbd_bot_list'] ) ),
-                'bot_status_code' => absint( $_POST['ipbd_bot_status_code'] ),
+                //'bot_status_code' => absint( $_POST['ipbd_bot_status_code'] ),
                 'block_empty_ua'  => isset( $_POST['ipbd_block_empty_ua'] ) ? 1 : 0,
                 'login_threshold' => absint( $_POST['ipbd_login_threshold'] ),
                 'login_lockout'   => absint( $_POST['ipbd_login_lockout'] ),
