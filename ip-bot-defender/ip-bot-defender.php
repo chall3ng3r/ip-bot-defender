@@ -2,7 +2,7 @@
 /**
  * Plugin Name: IP & Bot Defender
  * Description: Blocks IPs and bots that generate too many 404 errors or failed login attempts. Optimized for Cloudflare & Nginx setups.
- * Version: 1.2.1
+ * Version: 1.2.2
  * Author: chall3ng3r.com
  */
 
@@ -53,13 +53,9 @@ class IP_Bot_Defender {
         );
     }
 
-    /**
-     * Helper to get count of active blocks from the database
-     */
     private function get_block_count($type) {
         global $wpdb;
         $prefix = "_transient_ipbd_{$type}_";
-        // We count the base transients, excluding the timeout records
         return (int) $wpdb->get_var( $wpdb->prepare(
             "SELECT COUNT(option_id) FROM {$wpdb->options} WHERE option_name LIKE %s AND option_name NOT LIKE %s",
             $wpdb->esc_like( $prefix ) . '%',
@@ -100,6 +96,7 @@ class IP_Bot_Defender {
         list($range, $netmask) = explode('/', $range, 2);
         $range_dec = ip2long($range);
         $ip_dec = ip2long($ip);
+        if ($range_dec === false || $ip_dec === false) return false;
         $wildcard_dec = pow(2, (32 - $netmask)) - 1;
         $netmask_dec = ~ $wildcard_dec;
         return (($ip_dec & $netmask_dec) == ($range_dec & $netmask_dec));
@@ -142,8 +139,6 @@ class IP_Bot_Defender {
 
     public function render_admin_page() {
         $active_tab = isset( $_GET['tab'] ) ? sanitize_text_field( $_GET['tab'] ) : 'settings';
-        
-        // Get counts for tab labels
         $count_404 = $this->get_block_count('blocked');
         $count_login = $this->get_block_count('login');
         ?>
@@ -281,21 +276,25 @@ class IP_Bot_Defender {
         $settings = $this->get_settings();
         $ua = isset($_SERVER['HTTP_USER_AGENT']) ? trim($_SERVER['HTTP_USER_AGENT']) : '';
 
+        // Check 404 block or Login block
         if (get_transient('ipbd_blocked_' . $ip) || get_transient('ipbd_login_' . $ip)) {
             status_header($settings['status_code']);
             exit('Access Denied.');
         }
 
+        // Empty UA check
         if (!empty($settings['block_empty_ua']) && empty($ua)) {
-            status_header(403);
+            status_header($settings['status_code']);
             exit('Access Denied.');
         }
 
+        // Manual Bot check
         if (!empty($settings['bot_list']) && !empty($ua)) {
             $bots = explode("\n", str_replace("\r", "", $settings['bot_list']));
             foreach ($bots as $bot) {
-                if (!empty(trim($bot)) && stripos($ua, trim($bot)) !== false) {
-                    status_header(403);
+                $bot_name = trim($bot);
+                if (!empty($bot_name) && stripos($ua, $bot_name) !== false) {
+                    status_header($settings['status_code']);
                     exit('Access Denied.');
                 }
             }
