@@ -2,7 +2,7 @@
 /**
  * Plugin Name: IP & Bot Defender
  * Description: Blocks IPs and bots that generate too many 404 errors or failed login attempts. Optimized for Cloudflare & Nginx setups.
- * Version: 1.2.3
+ * Version: 1.2.4
  * Author: chall3ng3r.com
  */
 
@@ -161,7 +161,7 @@ class IP_Bot_Defender {
                 'time_limit'      => absint( $_POST['ipbd_time_limit'] ),
                 'status_code'     => absint( $_POST['ipbd_status_code'] ),
                 'bot_list'        => sanitize_textarea_field( wp_unslash( $_POST['ipbd_bot_list'] ) ),
-                //'bot_status_code' => absint( $_POST['ipbd_bot_status_code'] ),
+				//'bot_status_code' => absint( $_POST['ipbd_bot_status_code'] ),
                 'block_empty_ua'  => isset( $_POST['ipbd_block_empty_ua'] ) ? 1 : 0,
                 'login_threshold' => absint( $_POST['ipbd_login_threshold'] ),
                 'login_lockout'   => absint( $_POST['ipbd_login_lockout'] ),
@@ -258,6 +258,11 @@ class IP_Bot_Defender {
                         foreach ( $results as $row ) {
                             $ip = str_replace( $prefix, '', $row->option_name );
                             $data = maybe_unserialize( $row->option_value );
+                            
+                            // Safety Check: Avoid fatal error if $data is not an array (Legacy/Strike Transient)[cite: 3]
+                            $time_val = is_array($data) && isset($data['time']) ? $data['time'] : $current_time;
+                            $ua_val   = is_array($data) && isset($data['ua']) ? $data['ua'] : 'Unknown (Legacy Block)';
+
                             $timeout = get_option( "_transient_timeout_ipbd_{$type}_" . $ip );
                             if ( $timeout && $timeout < $current_time ) continue;
                             $diff = $timeout - $current_time;
@@ -265,8 +270,8 @@ class IP_Bot_Defender {
                             <tr>
                                 <th scope="row" class="check-column"><input type="checkbox" name="ipbd_ips[]" value="<?php echo esc_attr($ip); ?>"></th>
                                 <td><strong><?php echo esc_html($ip); ?></strong></td>
-                                <td style="font-size:11px;"><?php echo esc_html($data['ua'] ?? 'Unknown'); ?></td>
-                                <td><?php echo wp_date('M j, Y - g:i A', $data['time']); ?></td>
+                                <td style="font-size:11px;"><?php echo esc_html($ua_val); ?></td>
+                                <td><?php echo wp_date('M j, Y - g:i A', $time_val); ?></td>
                                 <td><?php echo ($diff > 0) ? floor($diff/3600).'h '.floor(($diff/60)%60).'m' : 'Expired'; ?></td>
                                 <td>
                                     <button type="submit" name="ipbd_unblock_ip" value="<?php echo esc_attr($ip); ?>" class="button button-small">Unblock</button>
