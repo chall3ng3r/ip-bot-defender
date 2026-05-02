@@ -2,7 +2,7 @@
 /**
  * Plugin Name: IP & Bot Defender
  * Description: Blocks IPs and bots that generate too many 404 errors or failed login attempts. Optimized for Cloudflare & Nginx setups.
- * Version: 1.2.4
+ * Version: 1.2.5
  * Author: chall3ng3r.com
  */
 
@@ -69,10 +69,12 @@ class IP_Bot_Defender {
     private function get_block_count($type) {
         global $wpdb;
         $prefix = "_transient_ipbd_{$type}_";
+        // Update: Exclude strike counters from the tab count
         return (int) $wpdb->get_var( $wpdb->prepare(
-            "SELECT COUNT(option_id) FROM {$wpdb->options} WHERE option_name LIKE %s AND option_name NOT LIKE %s",
+            "SELECT COUNT(option_id) FROM {$wpdb->options} WHERE option_name LIKE %s AND option_name NOT LIKE %s AND option_name NOT LIKE %s",
             $wpdb->esc_like( $prefix ) . '%',
-            $wpdb->esc_like( '_transient_timeout_' ) . '%'
+            $wpdb->esc_like( '_transient_timeout_' ) . '%',
+            $wpdb->esc_like( $prefix . 'strikes_' ) . '%'
         ));
     }
 
@@ -161,7 +163,6 @@ class IP_Bot_Defender {
                 'time_limit'      => absint( $_POST['ipbd_time_limit'] ),
                 'status_code'     => absint( $_POST['ipbd_status_code'] ),
                 'bot_list'        => sanitize_textarea_field( wp_unslash( $_POST['ipbd_bot_list'] ) ),
-				//'bot_status_code' => absint( $_POST['ipbd_bot_status_code'] ),
                 'block_empty_ua'  => isset( $_POST['ipbd_block_empty_ua'] ) ? 1 : 0,
                 'login_threshold' => absint( $_POST['ipbd_login_threshold'] ),
                 'login_lockout'   => absint( $_POST['ipbd_login_lockout'] ),
@@ -225,10 +226,12 @@ class IP_Bot_Defender {
     private function render_ips_tab($type) {
         global $wpdb;
         $prefix = "_transient_ipbd_{$type}_";
+        // Update: Exclude strike counters from being displayed in the table
         $results = $wpdb->get_results( $wpdb->prepare(
-            "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE %s AND option_name NOT LIKE %s",
+            "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE %s AND option_name NOT LIKE %s AND option_name NOT LIKE %s",
             $wpdb->esc_like( $prefix ) . '%',
-            $wpdb->esc_like( '_transient_timeout_' ) . '%'
+            $wpdb->esc_like( '_transient_timeout_' ) . '%',
+            $wpdb->esc_like( $prefix . 'strikes_' ) . '%'
         ));
         ?>
         <form method="POST" action="">
@@ -259,7 +262,7 @@ class IP_Bot_Defender {
                             $ip = str_replace( $prefix, '', $row->option_name );
                             $data = maybe_unserialize( $row->option_value );
                             
-                            // Safety Check: Avoid fatal error if $data is not an array (Legacy/Strike Transient)[cite: 3]
+                            // Safety Check: Avoid fatal error if $data is not an array
                             $time_val = is_array($data) && isset($data['time']) ? $data['time'] : $current_time;
                             $ua_val   = is_array($data) && isset($data['ua']) ? $data['ua'] : 'Unknown (Legacy Block)';
 
